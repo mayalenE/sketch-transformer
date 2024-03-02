@@ -1,6 +1,5 @@
 #  Learning to generate human-like sketches with a (decoder-only) transformer network
 
-
 <div align="center">
     <img src="sketching_cats.gif">
 </div>
@@ -34,30 +33,38 @@ If you do not have a GPU I recommend playing with a smaller model by decreasing 
 
 ### Dataset
  $p \in (0=draw,1=lift,2=eos)$
+
 ### Model 
-<img width="250" align="left" src="model_architecture.png">
+<img style="float: right; " width="250" src="model_architecture.png">
 
 The model architecture we use is depicted on the left image.
+
+#### Decoder Backbone
 As you can see, the backbone is very similar to the decoder architecture of the Transformer model in the ["Attention is all you Need"](https://arxiv.org/pdf/1706.03762.pdf).
 
-They are some minor differences within the decoder blocks (gray blocks), which follow the [nanoGPT tutorial](https://www.youtube.com/watch?v=kCc8FmEb1nY):
-* layer norm comes *before* the MHA and FF layers
-* As there is no encoder, we remove the cross-attention layers 
-:point_right: Be sure to check the nanoGPT tutorial for an in-depth understanding on this architecture!
+They are some minor differences within the decoder blocks which follow the [nanoGPT tutorial](https://www.youtube.com/watch?v=kCc8FmEb1nY):
+* layer norm comes *before* the multi-head attention (MHA) and feedforward (FF) layers
+* As there is no encoder, we remove the cross-attention layers
 
-Now for my target application I had to modify the input and output layers, as I'm dealing with sequences of *continuous* strokes which is quite different
-from traditional text sequences than transformer are used to deal with.
+:point_right: Be sure to check the nanoGPT tutorial for an in-depth understanding of this architecture and in particular of the self-attention mechanism which we do not detail here.
+
+#### Input and Output Layers
+Now for our target application I had to modify the **input** and **output** layers, as we're dealing with sequences of *continuous* strokes which is quite different
+from traditional text sequences.
 
 Let's start with the input layer. 
 The input data (partial sketch) is a sequence of stroke-3 tuples $(dx, dy, p)$ where $(dx, dy) \in \mathbb{R}^2$ and $p \in \\{0,1,2\\}$.
-The pen action $p$ is discrete and can take only 3-values, so we the `Pen Embedding` layer is a simple [nn.Embedding](https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html) layer with `num_embeddings=3`.
-The stroke action $(dx, dy)$, however, can take continuous values which is not something Transformers (and probabilistic sequence models in general), are often used for.
+* The pen action $p$ is discrete and can take only 3-values, so the `Pen Embedding` layer is a simple table of 3 d-dimensional embeddings which we code with [nn.Embedding](https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html) layer.
+* The stroke action $(dx, dy)$, however, can take continuous values. Therefore, for the `Stroke Embedding` layer we use  projector mapping the 2D-strokes into a d-dimensional space.
+* The positional embedding is, as traditionally, a [nn.Embedding](https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html) table of size `block_size` (max content length).
 
-
+For the output layer, we divide it in two heads:
+* The `Pen Head` which is simply a Linear Layer which outputs logits of size 3 that we use as parameters of a *Categorical Distribution* to sample pen actions at each time step
+* The `MDN Head` which stands for *Mixture Density Network (MDN)* and that we detail below.
  
 
-### Loss
 
+### Loss
 
 
 ### Training 
@@ -102,7 +109,7 @@ This is the kind of sketches we obtain:
 Things that I'd like to try next:
 * Finetune model and hyper-parameters: learning rate decay, gradient clipping, etc
 * Multi-class training on the Quick Draw Dataset
-* Multi-class training on [TU-Berlin Sketch Dataset](https://cybertron.cg.tu-berlin.de/eitz/projects/classifysketch/) where strokes are bezier curves represented by 6-tuples
+* Multi-class training on [TU-Berlin Sketch Dataset](https://cybertron.cg.tu-berlin.de/eitz/projects/classifysketch/) which seems to have slightly more advanced sketches and where strokes are represented by sequences of 7-tuple strokes 
 * Class-conditioned Sketch Generation, with a encoder and conditional VAE akin to what is done in [this paper](https://arxiv.org/pdf/2205.09391.pdf) 
 * I'd looove to generate more artisty sketches in the style of these [one line art drawings](https://medium.com/@michellegemmeke/the-art-of-one-line-drawings-8cd8fd5a5af7), 
 as I found them very poetic and minimalist at the same time, and could make great tattoo designs! So if you know any open database of such drawings please let me know :pray: 
