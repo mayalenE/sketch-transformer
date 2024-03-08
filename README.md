@@ -43,9 +43,18 @@ for instance.
 
 ### Dataset
 
-$p \in (0=draw,1=lift,2=eos)$
+We use the [Quick, Draw! Dataset](https://github.com/googlecreativelab/quickdraw-dataset) as training data. 
+The model is currently trained on the `cat` class of this dataset, but other subsets can be tried simply by changing the 
+`data_classes` hyperparameter in the notebook.
 
-### Model
+For each class, the dataset contains a set of 70K sketches for training, 2.5H for validation and 2.5K for testing.
+A sketch is represented as a sequence of pen stroke actions where each action is a vector of 3 elements $a=(\Delta x, \Delta y, p)$.
+The $(\Delta x, \Delta y)$ are the offset distance from the current pen position to previous one, and are normalized in the notebook
+to have a standard deviations of 1.
+The $p$ value can take 3 possible states: $0$ for drawing, $1$ for lifting the pen, and $2$ for end of sketch (no subsequent points will be rendered).
+
+
+### Sketch-Transformer Model
 
 <img align="right" width="250" src="model_architecture.png">
 
@@ -96,34 +105,45 @@ For the output layer, we divide it in two heads:
 Christopher Bishop in 1994,
 uses the output of a neural network as *parameters of a probability distribution* instead of direct output values.
 
-<div align="center">
-<img width="400" src="https://www.researchgate.net/publication/351962528/figure/fig3/AS:1028801072988171@1622296698451/Schematic-representation-of-a-Mixture-Density-Network-parameters-for-a-multimodal.ppm">
-</div>
+![MDN](MDN.png)
 
-For instance, as shown above, those parameters could be parameters $\\{ \alpha_j, \mu_j, \sigma_j \\}$ of a Gaussian
-Mixture Model (GMM) that we use to sample our outputs from $x \sim GMM (\\{ \pi_j, \mu_j, \sigma_j \\})$. 
-Imagine that, for each input, the output follows a probabilistic distribution.
-If we train our network with a vanilla regression task it will simple learn to recover one output value per input,
-which will likely be the average output value for each input. By modelling the output values with a GMM (or other distribution),
-we are more likely to be able to recover the true data distribution.
+In our case, as shown above, the network outputs are parameters $\\{ \pi_j, \mu_j, \Sigma_j \\}$ of a [Multivariate Gaussian
+Mixture Model (GMM)](https://en.wikipedia.org/wiki/Mixture_model#Multivariate_Gaussian_mixture_model) 
+that we use to sample our outputs from: $x \sim p(\theta)$ with $p(\theta) = \sum_{j=1}^{M} \pi_j \mathcal{N} (\mu_j, \Sigma_j)$. 
 
-:point-right: David Ha has made a complete [tutorial](https://github.com/hardmaru/pytorch_notebooks/blob/master/mixture_density_networks.ipynb) 
-on MDN that I highly recommend to intuitively understand why this is useful for many modern ML tasks in order to enable neural network to generate *multiple* output values for a given
-input. 
+The intuition is that if we would not train our network to output a probability distribution
+but directly the predicted strokes with a vanilla regression task, it would simply learn to recover one output stroke per input sequence (the average if trained with MLE). 
+By modelling the output values with a GMM (or other distribution), we enable the network to generate *multiple* output values for a given
+input hence we are more likely to be able to recover the true data distribution.
 
-If you think about it Transformer are already able to generate multiple output tokens given an input token, and they do it
-by modelling the outputs as categorical distribution. Here we use MDN to extend this idea to *continuous* tokens, by
+If you think about it for discrete sequences Transformer are already able to generate multiple output tokens given an input token sequence, and they do it
+by modelling the outputs with a categorical distribution. Here we use MDN to extend this idea to *continuous* tokens, by
 modelling the outputs with multivariate normal distributions.
 
-:point-right: You can also have a look at
-this [google colab](https://drive.google.com/file/d/1de5Q8ugdKoytOn14FrsVplLuFkMf4Y65/view?usp=sharing) where I play
-with MDN for a simple task inspired from David Ha's tutorial,
-but where the output is 2-dimensional, where GMM can have *full* covariance matrices as done
-in [this repo](https://github.com/haimengzhao/full-cov-mdn/tree/main?tab=readme-ov-file),
-and where we use `MultivariateNormal` and `OneHotCategorical` torch distributions to implement the GMM,
-as well as `torch.logsumexp` to compute the loss for numerical stability.
+:point-right: David Ha has made a complete [tutorial](https://github.com/hardmaru/pytorch_notebooks/blob/master/mixture_density_networks.ipynb) 
+on MDN that I highly recommend to intuitively understand why this can be useful for many modern ML tasks.
 
+
+:point-right: You can also have a look at
+this [google colab](https://drive.google.com/file/d/1de5Q8ugdKoytOn14FrsVplLuFkMf4Y65/view?usp=sharing) where I extend David Ha's tutorial to play
+with MDN with *full* covariance matrix on a task with *2-dimensional* output, and with a new implementation
+where we use `MultivariateNormal` and `OneHotCategorical` torch distributions to implement the GMM,
+as well as `torch.logsumexp` to compute the loss for numerical stability, akin to what is done in [this repo](https://github.com/haimengzhao/full-cov-mdn/tree/main?tab=readme-ov-file).
 ### Loss
+
+Our loss is the same than the *reconstruction loss* $L_R$ of the Sketch-RNN paper, which basically maximilizes
+the log-likelihood of the generated probability distribution to explain the training data.
+More precisely $L_R = L_s + L_p$ is the sum of $L_s$, negative log-likelihood of the generated GMM distributions
+to explain the set of $\\{\Delta x_i\\}$ stroke actions, and $L_p$, negative log-likelihood of the generated categorical 
+distributions to explain the set of $\\{p_i\\}$ pen actions:
+
+$$ \begin{align*} 
+L_s &= - \frac{1}{N_{max}} \sum_{i=1}^{N_s} \log (\sum_{j=1}^{L} \prod_{j,i} \pi_{i,j} \mathcal{N} (\Delta x_i | \mu_{i,j}, \Sigma_{i,j})) \\
+L_p &= - \frac{1}{N_{max}} \sum_{i=1}^{N_{max}} \log q_{i}[p_i]
+\end{align*} $$
+
+where $(\pi_{i,j}, \mu_{x_i,j}, \Sigma_{x_i,j})_{j=1..M}$ are the outputs of the MDN head for the i-th entry, and $q_i$ are the outputs of the Pen head.
+
 
 ### Training
 
@@ -160,24 +180,54 @@ The loss $L_R$ over the whole test set is $\approx 0.21$.
 
 ## Playing with the  model
 
+
+
 ### Generating sketches
 
 The trained model is saved under `model_cat.pth` and the `generate_samples.py` script enables to
 load this model and generate sketches as SVG images without having to re-run the whole notebook.
-This is the kind of sketches we obtain:
+Below are example sketches we obtain:
 
+![samples](samples.png)
+
+Sometimes we obtain weird sketches, like the ones on the left and sometimes we obtain cats with a body although this is quite rare and not often well done.
+
+Here the temperature is set to $\tau=0.4$.
 ### Interacting with human sketches
 
+We can also the have the model interact with a human simply by letting a human draw portions of the sketch, and letting the model complete the sequence.
+There is some lines of code in the notebook to make an interface enabling the human to generate the starting curve (sequence of strokes without lifting the pen).
+We can then let the model complete the sequence to finishs drawing the cat.
+Below is an example where the human draw a the oval shape (shown in black) and the model proposed 10 possible completions (shown in red), again with $\tau=0.4$.
+![samples](human_samples.png)
+
 ### CNC-Drawing the results
+If you are interested in having a robot drawing the results, as shown in the above gif, 
+the simplest way is simply to buy a drawing machine :smiley:
+You could for instance have a look at [this one](https://fr.aliexpress.com/item/32917861259.html?src=google&aff_fcid=80bd88f758234ec8b18629c4a60cd6b0-1709885232322-05425-UneMJZVf&aff_fsk=UneMJZVf&aff_platform=aaf&sk=UneMJZVf&aff_trace_key=80bd88f758234ec8b18629c4a60cd6b0-1709885232322-05425-UneMJZVf&terminal_id=3ce725d72e464ac09f72cbe7c0d382b9&afSmartRedirect=y) 
+or [this one](https://www.amazon.com/iDrawHome-Plotter-iDraw1-0-16T-Handwriting-Assemble/dp/B07FPL6R6F/ref=sr_1_22?crid=1FBGCG8XF1EBT&dib=eyJ2IjoiMSJ9.pmoW0TraqbDInvfYdTDVUwzZhDBAvxIcGIlXnANFVHH0baQwyVu6jgJWBi3QZHIrItdefErYqqSc6UQimoqiv0ZmnPTaKvuyUh2mcEe3gT2SuDCRvwK3uC9CzfMQl12Y72KWA-bfXck-6V8jde3D5IC1pxTMZXJgw23LfXREjg60zG4jXJiC-eWfFJHbyI61P5tinCMCfLPf2lGA6-a2J156YEYf2palskXZwQGlB2R7ff1kbsljv0-yk15LxhpQxZB9AAIvHehG4oLMFrj6t-2ydxS-rbGEI7PeZs8WQZs.VXMuvjd85-DqHY0C_IO3S-5f7XMIyEDi0OZ53v4gxxg&dib_tag=se&keywords=drawing+robot&qid=1709885071&sprefix=drawing+robot%2Caps%2C208&sr=8-22)
+with everything set up to hold a pen and start drawing!
+
+In our case, we opted for another option (see [aliexpress link](https://fr.aliexpress.com/item/4000092252232.html?spm=a2g0o.order_list.order_list_main.10.29eb1802JCGWPW&gatewayAdapt=glo2fra))
+which requires a bit of fine-tuning as it is not originally intended for this stuff but for engraving, but has the advantage of having  much bigger working area. 
+It is a CNC machine with a laser/engraving frame (which you can buy *without* the laser and board as we did) and it needs a few steps and a bit of 3d printing to make it work,
+with all credits going to [Antun Skuric](https://askuric.github.io/) for that :smiley: :
+- First you need to add an additional motor to motorise the z-axis, originally the laser engraver did not have it as it does not move in z-axis 
+(but the electronics have everything you need for the z-axis - we've checked it before buying)
+- Then you need to 3D-print (or make somehow differently) a pen holder of some kind, which can be quite artisanal as long as it makes the job!
+- We also added few wooden slats to facilitate positioning of the paper (which need to be horizontal and not move during printing)
+
+Once you have your machine, most of them use G-CODE based protocols and the absolute simplest program that Antun found online that does the job of sending the commands to the machine from the PC is the [UniversalGcode sender](https://github.com/winder/Universal-G-Code-Sender) (and its also open source, which is nice).
+
+You now have everything you need to go and draw those silly cat faces by yourself :joy_cat:
 
 ## Next Steps
 
 Things that I'd like to try next:
 
 * Finetune model and hyper-parameters: learning rate decay, gradient clipping, etc
-* Multi-class training on the Quick Draw Dataset
-* Multi-class training on [TU-Berlin Sketch Dataset](https://cybertron.cg.tu-berlin.de/eitz/projects/classifysketch/)
-  which seems to have slightly more advanced sketches and where strokes are represented by sequences of 7-tuple strokes
+* Multi-class training on the Quick Draw Dataset and on the [TU-Berlin Sketch Dataset](https://cybertron.cg.tu-berlin.de/eitz/projects/classifysketch/)
+  which seems to have slightly more advanced sketches, where sketches are represented by sequences of 7-tuple strokes (bezier curves)
 * Class-conditioned Sketch Generation, with a encoder and conditional VAE akin to what is done
   in [this paper](https://arxiv.org/pdf/2205.09391.pdf)
 * I'd looove to generate more artisty sketches in the style of
